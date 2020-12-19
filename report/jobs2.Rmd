@@ -1,0 +1,260 @@
+---
+title: "Job Analysis"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = F, message = F)
+```
+
+
+
+# Introduction
+
+This project mainly uses the rvest package as well as CSS selectors (which could be converted into XPath) to do the tasks the main work loop is:
+
+* make the initial query and reading the HTML document using read_html()
+
+* get list of nodes required for extract information wantted using CSS selectors and html_nodes():
+
+  - preferred skills:  using information of nodes CSS  selector ".skill-list"
+  
+  - salary, if available:   using information of nodes CSS  selector ".wage"
+  
+  - full, part-time, hourly, contract, or short-term: it is included in the ".wage" 
+
+  - degree fields/subjects mentioned:  using information of nodes CSS  selector ".job-title a"
+  
+  - location (city, state): using information of nodes CSS  selector ".location"
+
+Note for the following 3 types of information, we need to do lots of extra work:
+
+- required skills
+  
+- the free form text describing the position
+  
+- education level required or preferred
+
+
+First, we need to get links using href attribution in the node ".job-title a" and then combined with the base URL "https://www.cybercoders.com", we obtain the full link to each job postings in details.
+
+Second, by reading HTML in each job posting link, first find CSS selectors ".section-title" which are for the big titles such as "What You Will Be Doing", "What You Need for this Position" and then find CSS selectors ".section-data-title" which obtain the details of texts for the big titles. And the  required skills are included in the section "What You Need for this Position", the free form text describing the position are included in the section What You Will Be Doing", also, the education level required or preferred are included together with the required skills.
+
+
+At last,  note for this project, we are interested in the search term "data analyst", "data scientist" and the job website "cybercoders.com", for other search terms in the same website, the work loop should be very similar, but for other job websites, the details should be changed correspondingly which are not discussed in this project.
+ 
+# Data scrape details
+
+Following the methods described in the Approach section, we firstly obtained a data frame of raw information required.  The details are in the following R codes:
+
+```{r}
+library(rvest)
+baseurl <- "https://www.cybercoders.com"
+con <- read_html("https://www.cybercoders.com/search/?searchterms=data+analyst")
+links1 <- con %>% html_nodes(".job-title a") %>% html_attr("href")
+
+con2<- read_html("https://www.cybercoders.com/search/?page=2&searchterms=data%20analyst")
+links2 <- con2 %>% html_nodes(".job-title a") %>% html_attr("href")
+
+alllinks <- c(paste0(baseurl,links1),paste0(baseurl,links2))
+
+#preferred skills
+preferred_skills1<-con %>% html_nodes(".skill-list") %>% html_text()
+preferred_skills2<-con2 %>% html_nodes(".skill-list") %>% html_text()
+preferred_skills <- c(preferred_skills1, preferred_skills2)
+
+
+#salary, if available
+salary1<-con %>% html_nodes(".wage") %>% html_text()
+salary2<-con2 %>% html_nodes(".wage") %>% html_text()
+salary <- c(salary1,salary2)
+
+
+#degree fields/subjects mentioned
+title1<- con %>% html_nodes(".job-title a") %>% html_text()
+title2<- con2 %>% html_nodes(".job-title a") %>% html_text()
+title <- c(title1,title2)
+
+#location (city, state)
+
+location1<- con %>% html_nodes(".location")  %>% html_text()
+location2<- con2 %>% html_nodes(".location")  %>% html_text()
+location <- c(location1,location2)
+
+dt <- NULL
+  
+for(i in 1:length(alllinks)) {
+  
+  cont <- read_html(alllinks[i])
+ 
+
+   job_desc1 <-   cont %>%
+    html_nodes(".section-title") %>%
+    html_text()
+  job_desc2 <-   cont %>%
+    html_nodes(".section-data-title") %>%
+  html_text()
+  
+  job_desc2 <- job_desc2[1:length(job_desc1)]
+  
+  
+ #required skills
+  require_skills <- job_desc2[match("What You Need for this Position",job_desc1)]
+  
+  #the free form text describing the position
+
+  job_position <- job_desc2[match("What You Will Be Doing",job_desc1)]
+  
+  dt <- rbind(dt, c(require_skills = require_skills ,job_position = job_position))
+}
+dt <- data.frame(preferred_skills,salary,title,
+                 location,dt)
+```
+
+
+As the data is raw, we show a structure as following:
+
+```{r}
+str(dt)
+```
+
+
+```{r}
+head(dt)
+```
+
+# Data cleaning
+
+
+As the data is obtained in a raw format, in this section, we do some extra work to make the information scraped in a more formatted form.
+
+First, clean preferred skills:
+
+```{r}
+dt2 <- dt
+str(dt2$preferred_skills)
+a <- gsub(" ","",dt2$preferred_skills)
+a <- gsub("\r\n",";",a)
+a <- strsplit(a,split=";") 
+dt2$preferred_skills <-  sapply(a, function(x) paste0(x[x!=""],collapse = ";"))
+dt2$preferred_skills
+```
+
+Then, clean preferred skills:
+
+```{r}
+library(stringr)
+str(dt2$salary)
+dt2$fulltime <- ifelse(grepl("Full-time", dt2$salary),"Full-time","Not or Don't know")
+dt2$salary <- str_trim( gsub("Full-time", "", dt2$salary))
+```
+
+And note that, as the education level required or preferred is very flexible in the  required skills filed, it is too hard to find them out(sometimes, there are even no information of education levels) and for required skills and free form text describing the position, the two fields are in a flexible unstructed text format, for this website, these fields are very difficult to be formatted. However, overall, the data cleaned is in a quite better format now, it is displayed as following:
+
+```{r}
+library(tibble)
+as_tibble(dt2[,c(1,2,3,4,7,5,6)])
+```
+
+# Analysis
+
+## Compare with other boards 
+
+In this study, we use the board Github Jobs as a comparison, the words are:
+
+```{r}
+library(jsonlite)
+a <- fromJSON("https://jobs.github.com/positions.json?utf8=%E2%9C%93&description=data+analyst&location=")
+a2 <- fromJSON("https://jobs.github.com/positions.json?utf8=%E2%9C%93&description=data+scientist&location=")
+ 
+r <- rbind(a,a2)
+library(wordcloud)
+library(tidytext)
+library(dplyr)
+r2 <- r %>%
+  unnest_tokens(word, description) %>%
+  count(  word, sort = TRUE) %>% filter(nchar(word) > 6)
+head(r2)
+
+r2 <- data.frame(r2)
+wordcloud(r2[,1],r2[,2])
+```
+
+Words from this site:
+
+```{r}
+dt2$job_position <- as.character(dt2$job_position)
+r3 <- dt2 %>%
+  unnest_tokens(word, job_position) %>%
+  count(  word, sort = TRUE) %>% filter(nchar(word) > 6)
+head(r3)
+
+r3 <- data.frame(r3)
+wordcloud(r3[,1],r3[,2])
+```
+
+
+So the words are consistent, as they are mainly about analysis,development,project, process, system to describe data scientists.
+
+
+## specific words to subfield
+
+With the final cleaned data of job postings, in this section, we  using the obtained data to answer an example interested questions that what are specific words to subfield of data scientists?
+
+```{r,fig.width=8.8, fig.height=6.2}
+skills <- unlist(strsplit(dt2$preferred_skills, split = ";"))
+df <- as.data.frame(table(skills))
+library(dplyr)
+library(ggplot2)
+df2 <- df %>% arrange(-Freq) %>% slice(1:10)
+df2
+df2$skills <- factor(df2$skills, levels = df2$skills)
+df2 %>% ggplot(aes(skills, Freq)) + geom_col(fill="lightblue") 
+```
+
+So it can be found that for data scientist, the most frequency preferred skills are SQL, Python and R.
+
+## words related to salary levels
+
+Now, we investigate how the words related to salary levels:
+
+- high level salary -  the lowest salary > dollars 100k
+
+- low level salary -  the lowest salary < dollars 100k" 
+
+```{r,fig.width=8.8, fig.height=6.2}
+skills <- unlist(strsplit(dt2$preferred_skills[dt2$salary %in% c(
+                                                    "$110k - $150k" ,
+                                                    "$100k - $150k" ,
+                                                   "$100k - $130k" )], split = ";"))
+df <- as.data.frame(table(skills))
+df2 <- df %>% arrange(-Freq) %>% slice(1:10)
+df2
+df2$skills <- factor(df2$skills, levels = df2$skills)
+df2 %>% ggplot(aes(skills, Freq)) + geom_col(fill="lightblue") + ggtitle("High level salary - lowest salary > dollars 100k") 
+```
+
+```{r,fig.width=8.8, fig.height=6.2}
+skills <- unlist(strsplit(dt2$preferred_skills[!dt2$salary %in% c(
+                                                    "$110k - $150k" ,
+                                                    "$100k - $150k" ,
+                                                   "$100k - $130k" )], split = ";"))
+df <- as.data.frame(table(skills))
+df2 <- df %>% arrange(-Freq) %>% slice(1:10)
+df2
+df2$skills <- factor(df2$skills, levels = df2$skills)
+df2 %>% ggplot(aes(skills, Freq)) + geom_col(fill="lightblue") + ggtitle("Low level salary - lowest salary > dollars 100k") 
+```
+
+So there are clear difference between high level salary and low level one, for example, the low level salary need to know SQL, python, R and so on which might be used to do tasks in details such as data cleaning, data modeling. But the high level one such as CRO, Acturial is the type which has high theory knowledge of data science.
+
+So that for data scientist, theory is still more expensive than programming.
+
+## A list of descriptors
+
+Yes, at last, we can find data scientist has a list of descriptors: SQL, Python, R, Perl, analysis, development, project, process, system and so on.
+
+
+
